@@ -1,0 +1,16 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Local data and secrets
+*.db
+.env
+
+# Model weights and large data
+models/*.pt
+data/raw/
+
+# Frontend
+node_modules/
+backend/media/
