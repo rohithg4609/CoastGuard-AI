@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CoastGuard AI - Live detection test</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #111; color: #eee; }
+    #wrap { position: relative; display: inline-block; margin-top: 12px; }
+    video { display: block; max-width: 100%; width: 720px; }
+    canvas#overlay { position: absolute; left: 0; top: 0; }
+    button { padding: 8px 16px; margin-right: 8px; }
+  </style>
+</head>
+<body>
+  <h2>CoastGuard AI: live detection test</h2>
+  <button id="start">Start camera</button>
+  <button id="stop">Stop</button>
+  <span id="status">Not started</span>
+  <div id="wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <script>
+    const video = document.getElementById("video");
+    const overlay = document.getElementById("overlay");
+    const statusEl = document.getElementById("status");
+    const grab = document.createElement("canvas");
+    const SEND_WIDTH = 640;
+    let ws = null, stream = null, running = false;
+
+    document.getElementById("start").onclick = async () => {
+      if (running) return;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      } catch (e) {
+        statusEl.textContent = "Camera error: " + e.message;
+        return;
+      }
+      video.srcObject = stream;
+      await video.play();
+
+      ws = new WebSocket("ws://" + location.host + "/api/detection/live");
+      ws.onopen = () => { running = true; statusEl.textContent = "Connected"; sendFrame(); };
+      ws.onmessage = (event) => {
+        const result = JSON.parse(event.data);
+        if (result.error) { statusEl.textContent = result.error; }
+        else { draw(result); }
+        if (running) setTimeout(sendFrame, 30);
+      };
+      ws.onclose = () => { statusEl.textContent = "Disconnected"; running = false; };
+      ws.onerror = () => { statusEl.textContent = "Connection error"; };
+    };
+
+    document.getElementById("stop").onclick = () => {
+      running = false;
+      if (ws) ws.close();
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      overlay.getContext("2d").clearRect(0, 0, overlay.width, overlay.height);
+      statusEl.textContent = "Stopped";
+    };
+
+    // Sends one frame, then waits for the reply before sending the next
+    function sendFrame() {
+      if (!running || !ws || ws.readyState !== WebSocket.OPEN) return;
+      if (video.videoWidth === 0) { setTimeout(sendFrame, 100); return; }
+      const scale = SEND_WIDTH / video.videoWidth;
+      grab.width = SEND_WIDTH;
+      grab.height = Math.round(video.videoHeight * scale);
+      grab.getContext("2d").drawImage(video, 0, 0, grab.width, grab.height);
+      grab.toBlob((blob) => { if (blob && running) ws.send(blob); }, "image/jpeg", 0.7);
+    }
+
+    function draw(result) {
+      overlay.width = video.clientWidth;
+      overlay.height = video.clientHeight;
+      const ctx = overlay.getContext("2d");
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+      const sx = overlay.width / result.width;
+      const sy = overlay.height / result.height;
+      ctx.lineWidth = 3;
+      ctx.font = "16px Arial";
+      for (const d of result.detections) {
+        const [x1, y1, x2, y2] = d.bbox;
+        ctx.strokeStyle = "red";
+        ctx.strokeRect(x1 * sx, y1 * sy, (x2 - x1) * sx, (y2 - y1) * sy);
+        const label = d.class + " " + d.confidence.toFixed(2);
+        const w = ctx.measureText(label).width + 8;
+        const top = Math.max(0, y1 * sy - 22);
+        ctx.fillStyle = "red";
+        ctx.fillRect(x1 * sx, top, w, 22);
+        ctx.fillStyle = "white";
+        ctx.fillText(label, x1 * sx + 4, top + 16);
+      }
+      statusEl.textContent = result.detections.length + " detections, " +
+        result.processing_ms + " ms" + (result.is_placeholder ? " (placeholder model)" : "");
+    }
+  </script>
+</body>
+</html>
